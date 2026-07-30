@@ -21,4 +21,5 @@ backend/.tmp/
 .vscode/
 .wrangler/
 dist/
+pages-dist/
 coverage/
