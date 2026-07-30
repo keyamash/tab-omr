@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#eeede8" />
+    <meta name="description" content="ギターTAB譜画像をMusicXMLへ変換" />
+    <meta property="og:title" content="Tablature Lens" />
+    <meta property="og:description" content="TAB譜を、MusicXMLへ。" />
+    <meta property="og:image" content="/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>Tablature Lens — TAB譜をMusicXMLへ</title>
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="Tablature Lens ホーム">
+          <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span><b>Tablature</b><b>Lens</b></span>
+        </a>
+        <div class="mvp-badge"><span></span><b id="ocr-mode">PRIVATE BROWSER OCR</b></div>
+      </header>
+      <main>
+        <section class="hero">
+          <div class="hero-copy">
+            <span class="kicker">IMAGE TO MUSICXML</span>
+            <h1>そのTAB譜を、<br /><em>演奏データ</em>へ。</h1>
+            <p>五線譜＋TAB譜のスクリーンショットを解析し、TuxGuitarで開けるMusicXMLに変換します。</p>
+            <p class="privacy-callout" id="privacy-copy">現在は端末内で処理する公開MVPです。画像はアップロードされません。</p>
+          </div>
+          <div class="hero-notation" aria-hidden="true">
+            <div class="staff-lines"><span></span><span></span><span></span><span></span><span></span><b class="note note-one">●</b><b class="note note-two">●</b></div>
+            <div class="tab-lines"><span></span><span></span><span></span><span></span><span></span><span></span><b class="fret fret-one">3</b><b class="fret fret-two">0</b><b class="fret fret-three">2</b></div>
+          </div>
+        </section>
+        <div class="workflow-grid">
+          <div class="primary-column">
+            <section id="drop-zone" class="upload-zone" role="button" tabindex="0" aria-label="楽譜画像を選択">
+              <input id="file-input" class="sr-only" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple />
+              <div class="upload-mark" aria-hidden="true"><span>＋</span></div>
+              <div><h2>楽譜画像をここへ</h2><p>ドラッグ＆ドロップ、またはクリックして選択</p></div>
+              <span class="file-hint">JPG / PNG / WebP · 1枚10MBまで · 最大20枚</span>
+            </section>
+            <section id="queue-panel" class="queue-panel" hidden>
+              <div class="section-heading">
+                <div><span class="eyebrow">INPUT ORDER</span><h2>読み込み順</h2></div>
+                <span id="image-count" class="count-pill">0 / 20 枚</span>
+              </div>
+              <p class="queue-help">矢印ボタンで順番を整え、不要な画像は削除できます。</p>
+              <div id="image-queue" class="image-queue"></div>
+            </section>
+          </div>
+          <aside class="control-column">
+            <section class="settings-panel">
+              <div class="section-heading compact">
+                <div><span class="eyebrow">SCORE PROFILE</span><h2>楽譜設定</h2></div>
+                <span class="fixed-label">MVP固定</span>
+              </div>
+              <div class="setting-list">
+                <div class="setting-row"><span>チューニング</span><strong>E · A · D · G · B · E</strong></div>
+                <div class="setting-row"><span>拍子</span><strong>4 / 4</strong></div>
+                <label class="setting-row tempo-row"><span>テンポ</span><span class="tempo-control"><input id="tempo" aria-label="テンポ" type="number" min="30" max="300" value="120" /><b>BPM</b></span></label>
+              </div>
+              <p class="setting-note">鮮明な印刷譜向け。チョーキング、スライド、連符、変拍子にはまだ対応していません。</p>
+            </section>
+            <div id="error" class="error-banner" role="alert" hidden><span aria-hidden="true">!</span><p></p></div>
+            <button id="convert" type="button" class="convert-button" disabled>MusicXMLに変換<span aria-hidden="true">→</span></button>
+            <div class="process-note"><span aria-hidden="true">◎</span><p id="process-note">画像はこの端末内だけで処理されます。</p></div>
+            <section id="result" class="result-panel" aria-live="polite" hidden>
+              <div class="result-heading"><div class="success-mark">✓</div><div><span class="eyebrow">CONVERSION COMPLETE</span><h2>MusicXMLを生成しました</h2></div></div>
+              <div class="metrics"><div><strong id="measure-count">0</strong><span>小節</span></div><div><strong id="note-count">0</strong><span>音符</span></div><div id="warning-metric"><strong id="warning-count">0</strong><span>警告</span></div></div>
+              <div id="warnings" class="warnings" hidden><h3>確認してほしい箇所</h3><ul></ul></div>
+              <a id="download" class="download-button" href="#"><span>↓</span>MusicXMLをダウンロード</a>
+              <p class="download-note">TuxGuitarで開き、認識結果を確認・修正してください。</p>
+            </section>
+          </aside>
+        </div>
+      </main>
+      <footer><span>TABLATURE LENS · 2026</span><p>Clear scores in. Editable music out.</p></footer>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
+

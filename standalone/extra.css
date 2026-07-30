@@ -1,0 +1,20 @@
+.privacy-callout {
+  width: fit-content;
+  margin-top: 18px !important;
+  padding: 9px 12px;
+  border-left: 3px solid var(--green);
+  background: rgba(38, 77, 60, 0.07);
+  color: var(--green) !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  line-height: 1.5 !important;
+}
+
+.mvp-badge b {
+  font-size: inherit;
+}
+
+.image-card {
+  cursor: default;
+}
+
