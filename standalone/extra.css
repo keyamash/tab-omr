@@ -18,3 +18,78 @@
   cursor: default;
 }
 
+.score-preview {
+  margin-top: 28px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--ink);
+  background: #f9f8f3;
+  box-shadow: 0 22px 55px rgba(27, 29, 25, 0.08);
+}
+
+.score-preview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.score-preview-heading h2 {
+  margin: 5px 0 0;
+  font-family: "Playfair Display", serif;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.preview-badge {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.score-preview-help {
+  margin: 10px 0 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.score-pages {
+  display: grid;
+  gap: 14px;
+}
+
+.score-system {
+  overflow-x: auto;
+  border: 1px solid #d7d5cc;
+  background: white;
+  scrollbar-color: var(--green) #efeee8;
+  scrollbar-width: thin;
+}
+
+.score-system canvas {
+  display: block;
+  width: 1080px;
+  max-width: none;
+  height: 270px;
+}
+
+@media (max-width: 640px) {
+  .score-preview {
+    margin-top: 20px;
+    padding: 21px 17px;
+  }
+
+  .score-preview-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .score-preview-heading h2 {
+    font-size: 24px;
+  }
+}

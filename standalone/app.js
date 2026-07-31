@@ -149,7 +149,7 @@
     const warnings = [];
     for (let imageIndex = 0; imageIndex < state.images.length; imageIndex += 1) {
       const bitmap = await createImageBitmap(state.images[imageIndex].file);
-      const scale = Math.min(1, 1600 / bitmap.width);
+      const scale = Math.min(2, 2200 / bitmap.width);
       const width = Math.round(bitmap.width * scale);
       const height = Math.round(bitmap.height * scale);
       const canvas = document.createElement("canvas");
@@ -188,6 +188,8 @@
       note_count: measures.flat().reduce((sum, event) => sum + event.notes.length, 0),
       warning_count: warnings.length,
       warnings,
+      measures,
+      tempo,
       url: state.resultUrl,
       filename: `tab-score-${timestamp()}.musicxml`,
     };
@@ -195,12 +197,42 @@
 
   function toBinary(data) {
     const values = new Uint8Array(data.length / 4);
-    let sum = 0;
+    const histogram = new Uint32Array(256);
     for (let pixel = 0, index = 0; pixel < data.length; pixel += 4, index += 1) {
-      values[index] = data[pixel] * 0.299 + data[pixel + 1] * 0.587 + data[pixel + 2] * 0.114;
-      sum += values[index];
+      const value = Math.round(
+        data[pixel] * 0.299 +
+          data[pixel + 1] * 0.587 +
+          data[pixel + 2] * 0.114,
+      );
+      values[index] = value;
+      histogram[value] += 1;
     }
-    const threshold = Math.max(105, Math.min(220, sum / values.length - 28));
+    let totalSum = 0;
+    for (let value = 0; value < 256; value += 1) {
+      totalSum += value * histogram[value];
+    }
+    let backgroundWeight = 0;
+    let backgroundSum = 0;
+    let bestVariance = -1;
+    let threshold = 170;
+    for (let value = 0; value < 256; value += 1) {
+      backgroundWeight += histogram[value];
+      if (!backgroundWeight) continue;
+      const foregroundWeight = values.length - backgroundWeight;
+      if (!foregroundWeight) break;
+      backgroundSum += value * histogram[value];
+      const backgroundMean = backgroundSum / backgroundWeight;
+      const foregroundMean = (totalSum - backgroundSum) / foregroundWeight;
+      const variance =
+        backgroundWeight *
+        foregroundWeight *
+        (backgroundMean - foregroundMean) ** 2;
+      if (variance > bestVariance) {
+        bestVariance = variance;
+        threshold = value;
+      }
+    }
+    threshold = Math.max(95, Math.min(225, threshold));
     return values.map((value) => (value < threshold ? 1 : 0));
   }
 
@@ -211,7 +243,7 @@
       for (let x = 0; x < width; x += 1) dark += binary[y * width + x];
       if (dark > width * 0.24) rows.push(y);
     }
-    const centers = collapse(rows, 2);
+    const centers = collapse(rows, Math.max(2, Math.round(width / 1200)));
     const groups = [];
     [6, 5].forEach((count) => {
       for (let start = 0; start <= centers.length - count; start += 1) {
@@ -243,59 +275,118 @@
 
   const templateCache = new Map();
   function detectDigits(binary, width, height, tab, left, right) {
-    const top = Math.max(0, Math.round(tab.lines[0] - tab.spacing * 0.7));
-    const bottom = Math.min(height - 1, Math.round(tab.lines[5] + tab.spacing * 0.7));
-    const active = [];
-    for (let x = left + 3; x < right - 3; x += 1) {
-      let dark = 0;
-      for (let y = top; y <= bottom; y += 1) {
-        if (!tab.lines.some((line) => Math.abs(line - y) <= 2)) dark += binary[y * width + x];
-      }
-      if (dark >= 2) active.push(x);
-    }
     const candidates = [];
-    collapseRanges(active, Math.max(2, tab.spacing * 0.3)).forEach(([start, end]) => {
-      if (end - start < 2 || end - start > tab.spacing * 2.4) return;
-      const points = [];
-      for (let y = top; y <= bottom; y += 1) {
-        if (tab.lines.some((line) => Math.abs(line - y) <= 2)) continue;
-        for (let x = start; x <= end; x += 1) if (binary[y * width + x]) points.push([x, y]);
-      }
-      if (points.length < 5) return;
-      const centerY = points.reduce((sum, point) => sum + point[1], 0) / points.length;
-      let string = 1;
-      let distance = Infinity;
-      tab.lines.forEach((line, index) => {
-        if (Math.abs(line - centerY) < distance) {
-          distance = Math.abs(line - centerY);
-          string = index + 1;
+    const lineMask = Math.max(1, Math.round(tab.spacing * 0.1));
+    const halfBand = Math.max(4, Math.round(tab.spacing * 0.48));
+    tab.lines.forEach((line, stringIndex) => {
+      const top = Math.max(0, line - halfBand);
+      const bottom = Math.min(height - 1, line + halfBand);
+      const active = [];
+      for (let x = left + 4; x < right - 4; x += 1) {
+        let dark = 0;
+        for (let y = top; y <= bottom; y += 1) {
+          if (Math.abs(y - line) > lineMask) dark += binary[y * width + x];
         }
-      });
-      if (distance > tab.spacing * 0.82) return;
-      const fret = recognize(points, start, end, top, bottom);
-      if (fret !== null) candidates.push({ x: Math.round((start + end) / 2), string, fret });
+        if (dark >= Math.max(2, Math.round(tab.spacing * 0.12))) active.push(x);
+      }
+      collapseRanges(active, Math.max(2, tab.spacing * 0.28)).forEach(
+        ([start, end]) => {
+          const glyphWidth = end - start + 1;
+          if (glyphWidth < 2 || glyphWidth > tab.spacing * 2.1) return;
+          const points = [];
+          for (let y = top; y <= bottom; y += 1) {
+            if (Math.abs(y - line) <= lineMask) continue;
+            for (let x = start; x <= end; x += 1) {
+              if (binary[y * width + x]) points.push([x, y]);
+            }
+          }
+          if (points.length < Math.max(5, tab.spacing * 0.45)) return;
+          const fret = recognize(points);
+          if (fret !== null) {
+            candidates.push({
+              x: Math.round((start + end) / 2),
+              string: stringIndex + 1,
+              fret,
+            });
+          }
+        },
+      );
     });
-    return candidates;
+    return candidates.filter(
+      (candidate, index) =>
+        !candidates.slice(0, index).some((other) => {
+          return (
+            other.string === candidate.string &&
+            Math.abs(other.x - candidate.x) < tab.spacing * 0.25
+          );
+        }),
+    );
   }
 
-  function recognize(points, left, right, top, bottom) {
-    const normalized = normalize(points, left, right, top, bottom);
+  function recognize(points) {
+    const normalized = normalize(points);
     let best = null;
     let bestScore = 0;
+    const fonts = ["Arial", "Helvetica", "Verdana", "sans-serif"];
     for (let value = 0; value <= 24; value += 1) {
-      const template = renderTemplate(String(value));
-      let same = 0;
-      for (let index = 0; index < template.length; index += 1) if (template[index] === normalized[index]) same += 1;
-      if (same / template.length > bestScore) {
-        bestScore = same / template.length;
-        best = value;
+      for (const font of fonts) {
+        const template = renderTemplate(String(value), font);
+        const score = tolerantDice(normalized, template);
+        if (score > bestScore) {
+          bestScore = score;
+          best = value;
+        }
       }
     }
-    return bestScore >= 0.49 ? best : null;
+    return bestScore >= 0.42 ? best : null;
   }
 
-  function normalize(points, left, right, top, bottom) {
+  function tolerantDice(first, second) {
+    let firstCount = 0;
+    let secondCount = 0;
+    let firstHits = 0;
+    let secondHits = 0;
+    for (let y = 0; y < 36; y += 1) {
+      for (let x = 0; x < 28; x += 1) {
+        const index = y * 28 + x;
+        if (first[index]) {
+          firstCount += 1;
+          if (hasInkNear(second, x, y)) firstHits += 1;
+        }
+        if (second[index]) {
+          secondCount += 1;
+          if (hasInkNear(first, x, y)) secondHits += 1;
+        }
+      }
+    }
+    return (firstHits + secondHits) / Math.max(1, firstCount + secondCount);
+  }
+
+  function hasInkNear(image, x, y) {
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        const targetX = x + offsetX;
+        const targetY = y + offsetY;
+        if (
+          targetX >= 0 &&
+          targetX < 28 &&
+          targetY >= 0 &&
+          targetY < 36 &&
+          image[targetY * 28 + targetX]
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function normalize(points) {
     const output = new Uint8Array(28 * 36);
+    const left = Math.min(...points.map(([x]) => x));
+    const right = Math.max(...points.map(([x]) => x));
+    const top = Math.min(...points.map(([, y]) => y));
+    const bottom = Math.max(...points.map(([, y]) => y));
     const scale = Math.min(22 / Math.max(1, right - left + 1), 30 / Math.max(1, bottom - top + 1));
     const offsetX = (28 - (right - left + 1) * scale) / 2;
     const offsetY = (36 - (bottom - top + 1) * scale) / 2;
@@ -307,23 +398,27 @@
     return output;
   }
 
-  function renderTemplate(text) {
-    if (templateCache.has(text)) return templateCache.get(text);
+  function renderTemplate(text, font) {
+    const cacheKey = `${font}:${text}`;
+    if (templateCache.has(cacheKey)) return templateCache.get(cacheKey);
     const canvas = document.createElement("canvas");
-    canvas.width = 28;
-    canvas.height = 36;
+    canvas.width = 56;
+    canvas.height = 72;
     const context = canvas.getContext("2d", { willReadFrequently: true });
     context.fillStyle = "white";
-    context.fillRect(0, 0, 28, 36);
+    context.fillRect(0, 0, 56, 72);
     context.fillStyle = "black";
-    context.font = `${text.length === 1 ? 27 : 22}px Arial`;
+    context.font = `600 ${text.length === 1 ? 54 : 44}px ${font}`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText(text, 14, 19);
-    const data = context.getImageData(0, 0, 28, 36).data;
-    const output = new Uint8Array(28 * 36);
-    for (let pixel = 0, index = 0; pixel < data.length; pixel += 4, index += 1) output[index] = data[pixel] < 150 ? 1 : 0;
-    templateCache.set(text, output);
+    context.fillText(text, 28, 38);
+    const data = context.getImageData(0, 0, 56, 72).data;
+    const points = [];
+    for (let pixel = 0, index = 0; pixel < data.length; pixel += 4, index += 1) {
+      if (data[pixel] < 170) points.push([index % 56, Math.floor(index / 56)]);
+    }
+    const output = normalize(points);
+    templateCache.set(cacheKey, output);
     return output;
   }
 
@@ -384,6 +479,188 @@
     }).join("");
   }
 
+  function renderScore(measures, tempo) {
+    const preview = $("#score-preview");
+    const pages = $("#score-pages");
+    pages.replaceChildren();
+    if (!Array.isArray(measures) || !measures.length) {
+      preview.hidden = true;
+      return;
+    }
+    for (let start = 0; start < measures.length; start += 4) {
+      const systemMeasures = measures.slice(start, start + 4);
+      const wrapper = document.createElement("div");
+      wrapper.className = "score-system";
+      const canvas = document.createElement("canvas");
+      canvas.setAttribute(
+        "aria-label",
+        `小節${start + 1}から${start + systemMeasures.length}の楽譜`,
+      );
+      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = 1080 * ratio;
+      canvas.height = 270 * ratio;
+      const context = canvas.getContext("2d");
+      context.scale(ratio, ratio);
+      drawScoreSystem(context, systemMeasures, start, tempo);
+      wrapper.append(canvas);
+      pages.append(wrapper);
+    }
+    preview.hidden = false;
+  }
+
+  function drawScoreSystem(context, measures, measureOffset, tempo) {
+    const pageWidth = 1080;
+    const leftMargin = 72;
+    const measureWidth = 245;
+    const scoreRight = leftMargin + measureWidth * measures.length;
+    const staffTop = 42;
+    const staffGap = 9;
+    const staffBottom = staffTop + staffGap * 4;
+    const tabTop = 146;
+    const tabGap = 11;
+    const tabBottom = tabTop + tabGap * 5;
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, pageWidth, 270);
+    context.fillStyle = "#1b1d19";
+    context.strokeStyle = "#34362f";
+    context.lineWidth = 1;
+    context.font = "600 11px Arial, sans-serif";
+    context.fillText(
+      measureOffset === 0 ? `♩ = ${tempo}   Guitar` : "Guitar",
+      24,
+      20,
+    );
+    for (let line = 0; line < 5; line += 1) {
+      drawLine(context, leftMargin, staffTop + line * staffGap, scoreRight, staffTop + line * staffGap);
+    }
+    for (let line = 0; line < 6; line += 1) {
+      drawLine(context, leftMargin, tabTop + line * tabGap, scoreRight, tabTop + line * tabGap);
+    }
+    context.font = "42px Georgia, serif";
+    context.fillText("𝄞", 26, staffBottom + 7);
+    context.font = "700 15px Arial, sans-serif";
+    context.fillText("TAB", 25, tabTop + tabGap * 3 + 4);
+    if (measureOffset === 0) {
+      context.font = "700 16px Georgia, serif";
+      context.fillText("4", 57, staffTop + 14);
+      context.fillText("4", 57, staffTop + 31);
+    }
+    measures.forEach((events, measureIndex) => {
+      const measureLeft = leftMargin + measureIndex * measureWidth;
+      const measureRight = measureLeft + measureWidth;
+      context.lineWidth = measureIndex === 0 ? 1.4 : 1;
+      drawLine(context, measureLeft, staffTop, measureLeft, staffBottom);
+      drawLine(context, measureLeft, tabTop, measureLeft, tabBottom);
+      drawLine(context, measureRight, staffTop, measureRight, staffBottom);
+      drawLine(context, measureRight, tabTop, measureRight, tabBottom);
+      context.fillStyle = "#77796f";
+      context.font = "10px Arial, sans-serif";
+      context.fillText(String(measureOffset + measureIndex + 1), measureLeft + 7, 34);
+      let cursor = 0;
+      events.forEach((event) => {
+        const eventX =
+          measureLeft + 22 + (cursor / 16) * (measureWidth - 44);
+        if (!event.rest && event.notes.length) {
+          drawStandardNotes(context, event.notes, eventX, event.duration, staffTop, staffGap);
+          drawTabNotes(context, event.notes, eventX, tabTop, tabGap);
+        } else if (event.rest && event.duration >= 4) {
+          context.fillStyle = "#1b1d19";
+          context.fillRect(eventX - 5, staffTop + 17, 10, 4);
+        }
+        cursor += event.duration;
+      });
+    });
+  }
+
+  function drawStandardNotes(context, notes, x, duration, staffTop, staffGap) {
+    const tuning = [64, 59, 55, 50, 45, 40];
+    const stepByPitchClass = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
+    const accidentalPitchClasses = new Set([1, 3, 6, 8, 10]);
+    const positions = notes.map((note) => {
+      const writtenMidi = tuning[note.string - 1] + note.fret + 12;
+      const pitchClass = writtenMidi % 12;
+      const octave = Math.floor(writtenMidi / 12) - 1;
+      const diatonic = octave * 7 + stepByPitchClass[pitchClass];
+      const bottomLineDiatonic = 4 * 7 + 2;
+      return {
+        y: staffTop + staffGap * 4 - (diatonic - bottomLineDiatonic) * (staffGap / 2),
+        sharp: accidentalPitchClasses.has(pitchClass),
+      };
+    });
+    positions.forEach(({ y, sharp }) => {
+      drawLedgerLines(context, x, y, staffTop, staffGap);
+      if (sharp) {
+        context.fillStyle = "#1b1d19";
+        context.font = "13px Georgia, serif";
+        context.fillText("♯", x - 14, y + 4);
+      }
+      context.save();
+      context.translate(x, y);
+      context.rotate(-0.28);
+      context.beginPath();
+      context.ellipse(0, 0, 6.5, 4.5, 0, 0, Math.PI * 2);
+      context.fillStyle = "#1b1d19";
+      context.fill();
+      context.restore();
+    });
+    const averageY =
+      positions.reduce((sum, position) => sum + position.y, 0) /
+      positions.length;
+    const stemUp = averageY > staffTop + staffGap * 2;
+    const stemX = x + (stemUp ? 6 : -6);
+    const noteY = stemUp
+      ? Math.min(...positions.map((position) => position.y))
+      : Math.max(...positions.map((position) => position.y));
+    const stemEnd = noteY + (stemUp ? -28 : 28);
+    drawLine(context, stemX, noteY, stemX, stemEnd);
+    if (duration < 4) {
+      context.beginPath();
+      context.moveTo(stemX, stemEnd);
+      context.quadraticCurveTo(
+        stemX + (stemUp ? 10 : -10),
+        stemEnd + (stemUp ? 7 : -7),
+        stemX + (stemUp ? 7 : -7),
+        stemEnd + (stemUp ? 15 : -15),
+      );
+      context.stroke();
+    }
+  }
+
+  function drawLedgerLines(context, x, y, staffTop, staffGap) {
+    const staffBottom = staffTop + staffGap * 4;
+    if (y < staffTop - 1) {
+      for (let lineY = staffTop - staffGap; lineY >= y - 1; lineY -= staffGap) {
+        drawLine(context, x - 10, lineY, x + 10, lineY);
+      }
+    } else if (y > staffBottom + 1) {
+      for (let lineY = staffBottom + staffGap; lineY <= y + 1; lineY += staffGap) {
+        drawLine(context, x - 10, lineY, x + 10, lineY);
+      }
+    }
+  }
+
+  function drawTabNotes(context, notes, x, tabTop, tabGap) {
+    notes.forEach((note) => {
+      const y = tabTop + (note.string - 1) * tabGap;
+      const text = String(note.fret);
+      context.font = "700 12px Arial, sans-serif";
+      const width = context.measureText(text).width + 6;
+      context.fillStyle = "#fff";
+      context.fillRect(x - width / 2, y - 7, width, 14);
+      context.fillStyle = "#1b1d19";
+      context.textAlign = "center";
+      context.fillText(text, x, y + 4);
+      context.textAlign = "start";
+    });
+  }
+
+  function drawLine(context, x1, y1, x2, y2) {
+    context.beginPath();
+    context.moveTo(x1, y1);
+    context.lineTo(x2, y2);
+    context.stroke();
+  }
+
   function collapse(values, tolerance) {
     return collapseRanges(values, tolerance).map(([start, end]) => Math.round((start + end) / 2));
   }
@@ -428,9 +705,12 @@
     download.href = result.url;
     download.download = result.filename;
     $("#result").hidden = false;
+    renderScore(result.measures, result.tempo || Number($("#tempo").value));
   }
   function clearResult() {
     $("#result").hidden = true;
+    $("#score-preview").hidden = true;
+    $("#score-pages").replaceChildren();
     if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
     state.resultUrl = "";
   }
@@ -448,4 +728,3 @@
       : 'MusicXMLに変換<span aria-hidden="true">→</span>';
   }
 })();
-

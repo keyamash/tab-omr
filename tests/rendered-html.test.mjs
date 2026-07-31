@@ -20,6 +20,7 @@ test("server-renders the Tablature Lens product", async () => {
   assert.match(html, /そのTAB譜を/);
   assert.match(html, /MusicXMLに変換/);
   assert.match(html, /PRIVATE BROWSER OCR/);
+  assert.match(html, /認識した楽譜/);
+  assert.match(html, /score-preview/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
-
