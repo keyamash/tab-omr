@@ -113,6 +113,10 @@
 
   async function convert() {
     const tempo = Number($("#tempo").value);
+    const tuning =
+      $("#tuning").value === "half-down"
+        ? [63, 58, 54, 49, 44, 39]
+        : [64, 59, 55, 50, 45, 40];
     if (!Number.isInteger(tempo) || tempo < 30 || tempo > 300) {
       return showError("テンポは30〜300 BPMの整数で指定してください。");
     }
@@ -121,8 +125,8 @@
     setBusy(true);
     try {
       const result = API_BASE
-        ? await convertWithApi(tempo)
-        : await convertInBrowser(tempo);
+        ? await convertWithApi(tempo, tuning)
+        : await convertInBrowser(tempo, tuning);
       showResult(result);
     } catch (error) {
       showError(error instanceof Error ? error.message : "変換に失敗しました");
@@ -131,20 +135,25 @@
     }
   }
 
-  async function convertWithApi(tempo) {
+  async function convertWithApi(tempo, tuning) {
     const body = new FormData();
     state.images.forEach((image) => body.append("files", image.file));
     body.append("tempo", tempo);
     body.append("beats", "4");
     body.append("beat_type", "4");
-    body.append("tuning", "[64,59,55,50,45,40]");
+    body.append("tuning", JSON.stringify(tuning));
     const response = await fetch(`${API_BASE}/api/convert`, { method: "POST", body });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "変換に失敗しました");
-    return { ...payload, url: `${API_BASE}${payload.download_url}`, filename: "tab-score.musicxml" };
+    return {
+      ...payload,
+      tuning,
+      url: `${API_BASE}${payload.download_url}`,
+      filename: "tab-score.musicxml",
+    };
   }
 
-  async function convertInBrowser(tempo) {
+  async function convertInBrowser(tempo, tuning) {
     const measures = [];
     const warnings = [];
     for (let imageIndex = 0; imageIndex < state.images.length; imageIndex += 1) {
@@ -158,7 +167,11 @@
       const context = canvas.getContext("2d", { willReadFrequently: true });
       context.drawImage(bitmap, 0, 0, width, height);
       bitmap.close();
-      const binary = toBinary(context.getImageData(0, 0, width, height).data);
+      const binary = toBinary(
+        context.getImageData(0, 0, width, height).data,
+        width,
+        height,
+      );
       const groups = detectGroups(binary, width, height);
       const tabs = groups.filter((group) => group.lines.length === 6);
       if (!tabs.length) {
@@ -171,7 +184,15 @@
       tabs.forEach((tab) => {
         const bars = detectBars(binary, width, height, tab);
         for (let index = 0; index < bars.length - 1; index += 1) {
-          const candidates = detectDigits(binary, width, height, tab, bars[index], bars[index + 1]);
+          const candidates = detectDigits(
+            binary,
+            width,
+            height,
+            tab,
+            bars[index],
+            bars[index + 1],
+            index === 0,
+          );
           if (candidates.length) measures.push(fillMeasure(cluster(candidates, bars[index + 1] - bars[index])));
         }
       });
@@ -180,7 +201,7 @@
       measures.push(Array.from({ length: 4 }, () => ({ duration: 4, notes: [], rest: true })));
       warnings.push({ image_index: 0, measure_index: 1, message: "音符を確定できなかったため、空小節を生成しました" });
     }
-    const xml = musicXml(measures, tempo);
+    const xml = musicXml(measures, tempo, tuning);
     const blob = new Blob([xml], { type: "application/vnd.recordare.musicxml+xml" });
     state.resultUrl = URL.createObjectURL(blob);
     return {
@@ -190,12 +211,13 @@
       warnings,
       measures,
       tempo,
+      tuning,
       url: state.resultUrl,
       filename: `tab-score-${timestamp()}.musicxml`,
     };
   }
 
-  function toBinary(data) {
+  function toBinary(data, width, height) {
     const values = new Uint8Array(data.length / 4);
     const histogram = new Uint32Array(256);
     for (let pixel = 0, index = 0; pixel < data.length; pixel += 4, index += 1) {
@@ -233,7 +255,22 @@
       }
     }
     threshold = Math.max(95, Math.min(225, threshold));
-    return values.map((value) => (value < threshold ? 1 : 0));
+    const output = values.map((value) => (value < threshold ? 1 : 0));
+    const radius = 3;
+    for (let y = radius; y < height - radius; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        if (output[index]) continue;
+        const localBackground =
+          (values[(y - radius) * width + x] +
+            values[(y + radius) * width + x]) /
+          2;
+        if (values[index] < 245 && localBackground - values[index] > 10) {
+          output[index] = 1;
+        }
+      }
+    }
+    return output;
   }
 
   function detectGroups(binary, width, height) {
@@ -269,20 +306,48 @@
       for (let y = top; y <= bottom; y += 1) dark += binary[y * width + x];
       if (dark > (bottom - top) * 0.54) columns.push(x);
     }
-    const values = [0, ...collapse(columns, 3).filter((x) => x > 2 && x < width - 3), width - 1];
-    return values.filter((value, index) => index === 0 || value - values[index - 1] >= Math.max(26, width / 45));
+    const extensionTop = Math.min(
+      height - 1,
+      Math.round(tab.lines[5] + tab.spacing * 0.35),
+    );
+    const extensionBottom = Math.min(
+      height - 1,
+      Math.round(tab.lines[5] + tab.spacing * 3.2),
+    );
+    const bars = collapse(columns, 3).filter((x) => {
+      if (x <= 2 || x >= width - 3) return false;
+      let continuation = 0;
+      for (let y = extensionTop; y <= extensionBottom; y += 1) {
+        for (let offset = -1; offset <= 1; offset += 1) {
+          continuation += binary[y * width + x + offset];
+        }
+      }
+      return continuation < Math.max(8, tab.spacing * 0.6);
+    });
+    const values = [...bars];
+    if (!values.length || values[0] > width * 0.2) values.unshift(0);
+    if (!values.length || values.at(-1) < width - 3) values.push(width - 1);
+    return values.filter(
+      (value, index) =>
+        index === 0 ||
+        value - values[index - 1] >= Math.max(26, width / 45),
+    );
   }
 
   const templateCache = new Map();
-  function detectDigits(binary, width, height, tab, left, right) {
+  function detectDigits(binary, width, height, tab, left, right, systemStart) {
     const candidates = [];
     const lineMask = Math.max(1, Math.round(tab.spacing * 0.1));
     const halfBand = Math.max(4, Math.round(tab.spacing * 0.48));
+    const notationInset = systemStart
+      ? Math.min((right - left) * 0.24, tab.spacing * 3.6)
+      : 0;
+    const contentLeft = Math.round(left + notationInset);
     tab.lines.forEach((line, stringIndex) => {
       const top = Math.max(0, line - halfBand);
       const bottom = Math.min(height - 1, line + halfBand);
       const active = [];
-      for (let x = left + 4; x < right - 4; x += 1) {
+      for (let x = contentLeft + 4; x < right - 4; x += 1) {
         let dark = 0;
         for (let y = top; y <= bottom; y += 1) {
           if (Math.abs(y - line) > lineMask) dark += binary[y * width + x];
@@ -292,15 +357,26 @@
       collapseRanges(active, Math.max(2, tab.spacing * 0.28)).forEach(
         ([start, end]) => {
           const glyphWidth = end - start + 1;
-          if (glyphWidth < 2 || glyphWidth > tab.spacing * 2.1) return;
+          if (
+            glyphWidth < Math.max(4, tab.spacing * 0.22) ||
+            glyphWidth > tab.spacing * 2.1
+          ) {
+            return;
+          }
           const points = [];
           for (let y = top; y <= bottom; y += 1) {
-            if (Math.abs(y - line) <= lineMask) continue;
             for (let x = start; x <= end; x += 1) {
               if (binary[y * width + x]) points.push([x, y]);
             }
           }
-          if (points.length < Math.max(5, tab.spacing * 0.45)) return;
+          const pointTop = Math.min(...points.map(([, y]) => y));
+          const pointBottom = Math.max(...points.map(([, y]) => y));
+          if (
+            points.length < Math.max(5, tab.spacing * 0.45) ||
+            pointBottom - pointTop + 1 < tab.spacing * 0.42
+          ) {
+            return;
+          }
           const fret = recognize(points);
           if (fret !== null) {
             candidates.push({
@@ -324,17 +400,42 @@
   }
 
   function recognize(points) {
-    const normalized = normalize(points);
+    const left = Math.min(...points.map(([x]) => x));
+    const right = Math.max(...points.map(([x]) => x));
+    const top = Math.min(...points.map(([, y]) => y));
+    const bottom = Math.max(...points.map(([, y]) => y));
+    const width = right - left + 1;
+    const height = bottom - top + 1;
+    const variants = [normalize(points)];
+    if (width / Math.max(1, height) > 1.45) {
+      const inset = width * 0.18;
+      const innerPoints = points.filter(
+        ([x]) => x >= left + inset && x <= right - inset,
+      );
+      if (innerPoints.length >= 5) variants.unshift(normalize(innerPoints));
+    }
     let best = null;
     let bestScore = 0;
-    const fonts = ["Arial", "Helvetica", "Verdana", "sans-serif"];
+    const fonts = [
+      "Arial",
+      "Helvetica",
+      "Verdana",
+      "Times New Roman",
+      "Georgia",
+      "sans-serif",
+      "serif",
+    ];
     for (let value = 0; value <= 24; value += 1) {
       for (const font of fonts) {
-        const template = renderTemplate(String(value), font);
-        const score = tolerantDice(normalized, template);
-        if (score > bestScore) {
-          bestScore = score;
-          best = value;
+        for (const weight of [400, 600]) {
+          const template = renderTemplate(String(value), font, weight);
+          for (const normalized of variants) {
+            const score = tolerantDice(normalized, template);
+            if (score > bestScore) {
+              bestScore = score;
+              best = value;
+            }
+          }
         }
       }
     }
@@ -398,8 +499,8 @@
     return output;
   }
 
-  function renderTemplate(text, font) {
-    const cacheKey = `${font}:${text}`;
+  function renderTemplate(text, font, weight) {
+    const cacheKey = `${font}:${weight}:${text}`;
     if (templateCache.has(cacheKey)) return templateCache.get(cacheKey);
     const canvas = document.createElement("canvas");
     canvas.width = 56;
@@ -408,7 +509,7 @@
     context.fillStyle = "white";
     context.fillRect(0, 0, 56, 72);
     context.fillStyle = "black";
-    context.font = `600 ${text.length === 1 ? 54 : 44}px ${font}`;
+    context.font = `${weight} ${text.length === 1 ? 54 : 44}px ${font}`;
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(text, 28, 38);
@@ -456,20 +557,29 @@
     return output;
   }
 
-  function musicXml(measures, tempo) {
-    const tuning = [["E", 2], ["A", 2], ["D", 3], ["G", 3], ["B", 3], ["E", 4]]
-      .map(([step, octave], index) => `<staff-tuning line="${index + 1}"><tuning-step>${step}</tuning-step><tuning-octave>${octave}</tuning-octave></staff-tuning>`).join("");
+  function musicXml(measures, tempo, tuning) {
+    const steps = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"];
+    const alters = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+    const tuningXml = [...tuning]
+      .reverse()
+      .map((midi, index) => {
+        const pitchClass = midi % 12;
+        const alter = alters[pitchClass]
+          ? `<tuning-alter>${alters[pitchClass]}</tuning-alter>`
+          : "";
+        return `<staff-tuning line="${index + 1}"><tuning-step>${steps[pitchClass]}</tuning-step>${alter}<tuning-octave>${Math.floor(midi / 12) - 1}</tuning-octave></staff-tuning>`;
+      })
+      .join("");
     const body = measures.map((events, index) => {
-      const attrs = index === 0 ? `<attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>TAB</sign><line>5</line></clef><staff-details><staff-lines>6</staff-lines>${tuning}</staff-details></attributes><direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempo}</per-minute></metronome></direction-type><sound tempo="${tempo}"/></direction>` : "";
-      return `<measure number="${index + 1}">${attrs}${events.map(eventXml).join("")}</measure>`;
+      const attrs = index === 0 ? `<attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>TAB</sign><line>5</line></clef><staff-details><staff-lines>6</staff-lines>${tuningXml}</staff-details></attributes><direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${tempo}</per-minute></metronome></direction-type><sound tempo="${tempo}"/></direction>` : "";
+      return `<measure number="${index + 1}">${attrs}${events.map((event) => eventXml(event, tuning)).join("")}</measure>`;
     }).join("");
     return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0"><work><work-title>Tablature Lens Conversion</work-title></work><identification><encoding><software>Tablature Lens Browser OCR</software></encoding></identification><part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list><part id="P1">${body}</part></score-partwise>`;
   }
 
-  function eventXml(event) {
+  function eventXml(event, tuning) {
     const type = event.duration >= 4 ? "quarter" : event.duration >= 2 ? "eighth" : "16th";
     if (event.rest) return `<note><rest/><duration>${event.duration}</duration><voice>1</voice><type>${type}</type><staff>1</staff></note>`;
-    const tuning = [64, 59, 55, 50, 45, 40];
     const steps = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"];
     const alters = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
     return event.notes.map((note, index) => {
@@ -479,7 +589,7 @@
     }).join("");
   }
 
-  function renderScore(measures, tempo) {
+  function renderScore(measures, tempo, tuning) {
     const preview = $("#score-preview");
     const pages = $("#score-pages");
     pages.replaceChildren();
@@ -501,14 +611,20 @@
       canvas.height = 270 * ratio;
       const context = canvas.getContext("2d");
       context.scale(ratio, ratio);
-      drawScoreSystem(context, systemMeasures, start, tempo);
+      drawScoreSystem(
+        context,
+        systemMeasures,
+        start,
+        tempo,
+        Array.isArray(tuning) ? tuning : [64, 59, 55, 50, 45, 40],
+      );
       wrapper.append(canvas);
       pages.append(wrapper);
     }
     preview.hidden = false;
   }
 
-  function drawScoreSystem(context, measures, measureOffset, tempo) {
+  function drawScoreSystem(context, measures, measureOffset, tempo, tuning) {
     const pageWidth = 1080;
     const leftMargin = 72;
     const measureWidth = 245;
@@ -561,7 +677,15 @@
         const eventX =
           measureLeft + 22 + (cursor / 16) * (measureWidth - 44);
         if (!event.rest && event.notes.length) {
-          drawStandardNotes(context, event.notes, eventX, event.duration, staffTop, staffGap);
+          drawStandardNotes(
+            context,
+            event.notes,
+            eventX,
+            event.duration,
+            staffTop,
+            staffGap,
+            tuning,
+          );
           drawTabNotes(context, event.notes, eventX, tabTop, tabGap);
         } else if (event.rest && event.duration >= 4) {
           context.fillStyle = "#1b1d19";
@@ -572,8 +696,15 @@
     });
   }
 
-  function drawStandardNotes(context, notes, x, duration, staffTop, staffGap) {
-    const tuning = [64, 59, 55, 50, 45, 40];
+  function drawStandardNotes(
+    context,
+    notes,
+    x,
+    duration,
+    staffTop,
+    staffGap,
+    tuning,
+  ) {
     const stepByPitchClass = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
     const accidentalPitchClasses = new Set([1, 3, 6, 8, 10]);
     const positions = notes.map((note) => {
@@ -705,7 +836,11 @@
     download.href = result.url;
     download.download = result.filename;
     $("#result").hidden = false;
-    renderScore(result.measures, result.tempo || Number($("#tempo").value));
+    renderScore(
+      result.measures,
+      result.tempo || Number($("#tempo").value),
+      result.tuning,
+    );
   }
   function clearResult() {
     $("#result").hidden = true;

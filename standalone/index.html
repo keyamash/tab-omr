@@ -56,14 +56,20 @@
             <section class="settings-panel">
               <div class="section-heading compact">
                 <div><span class="eyebrow">SCORE PROFILE</span><h2>楽譜設定</h2></div>
-                <span class="fixed-label">MVP固定</span>
+                <span class="fixed-label">基本設定</span>
               </div>
               <div class="setting-list">
-                <div class="setting-row"><span>チューニング</span><strong>E · A · D · G · B · E</strong></div>
+                <label class="setting-row tuning-row">
+                  <span>チューニング</span>
+                  <select id="tuning" class="tuning-select" aria-label="チューニング">
+                    <option value="standard">スタンダード（E A D G B E）</option>
+                    <option value="half-down">半音下げ（E♭ A♭ D♭ G♭ B♭ E♭）</option>
+                  </select>
+                </label>
                 <div class="setting-row"><span>拍子</span><strong>4 / 4</strong></div>
                 <label class="setting-row tempo-row"><span>テンポ</span><span class="tempo-control"><input id="tempo" aria-label="テンポ" type="number" min="30" max="300" value="120" /><b>BPM</b></span></label>
               </div>
-              <p class="setting-note">鮮明な印刷譜向け。チョーキング、スライド、連符、変拍子にはまだ対応していません。</p>
+              <p class="setting-note">画像に合うチューニングを選んでください。チョーキング、スライド、連符、変拍子にはまだ対応していません。</p>
             </section>
             <div id="error" class="error-banner" role="alert" hidden><span aria-hidden="true">!</span><p></p></div>
             <button id="convert" type="button" class="convert-button" disabled>MusicXMLに変換<span aria-hidden="true">→</span></button>

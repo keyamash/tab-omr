@@ -18,6 +18,20 @@
   cursor: default;
 }
 
+.tuning-row {
+  align-items: center;
+}
+
+.tuning-select {
+  max-width: 225px;
+  padding: 8px 28px 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: white;
+  color: var(--ink);
+  font: 600 10px/1.3 Arial, sans-serif;
+}
+
 .score-preview {
   margin-top: 28px;
   padding: 28px;
