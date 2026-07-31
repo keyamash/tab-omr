@@ -77,6 +77,7 @@
             <section id="result" class="result-panel" aria-live="polite" hidden>
               <div class="result-heading"><div class="success-mark">✓</div><div><span class="eyebrow">CONVERSION COMPLETE</span><h2>MusicXMLを生成しました</h2></div></div>
               <div class="metrics"><div><strong id="measure-count">0</strong><span>小節</span></div><div><strong id="note-count">0</strong><span>音符</span></div><div><strong id="technique-count">0</strong><span>奏法</span></div><div id="warning-metric"><strong id="warning-count">0</strong><span>警告</span></div></div>
+              <p id="overlap-note" class="overlap-note" hidden></p>
               <div id="warnings" class="warnings" hidden><h3>確認してほしい箇所</h3><ul></ul></div>
               <a id="download" class="download-button" href="#"><span>↓</span>MusicXMLをダウンロード</a>
               <p class="download-note">TuxGuitarで開き、認識結果を確認・修正してください。</p>
@@ -98,6 +99,7 @@
       <footer><span>TABLATURE LENS · 2026</span><p>Clear scores in. Editable music out.</p></footer>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+    <script src="./overlap.js" defer></script>
     <script src="./app.js" defer></script>
   </body>
 </html>

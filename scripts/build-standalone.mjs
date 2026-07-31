@@ -1,11 +1,12 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const read = (path, encoding = "utf8") => readFile(new URL(`../${path}`, import.meta.url), encoding);
-const [htmlSource, cssSource, extraCss, appJs, og, favicon] = await Promise.all([
+const [htmlSource, cssSource, extraCss, appJs, overlapJs, og, favicon] = await Promise.all([
   read("standalone/index.html"),
   read("frontend/src/styles.css"),
   read("standalone/extra.css"),
   read("standalone/app.js"),
+  read("standalone/overlap.js"),
   read("public/og.jpg", null),
   read("public/favicon.svg"),
 ]);
@@ -21,6 +22,7 @@ const worker = `const files={
 "/index.html":{body:${JSON.stringify(html)},type:"text/html; charset=utf-8"},
 "/app.css":{body:${JSON.stringify(css)},type:"text/css; charset=utf-8"},
 "/app.js":{body:${JSON.stringify(appJs)},type:"text/javascript; charset=utf-8"},
+"/overlap.js":{body:${JSON.stringify(overlapJs)},type:"text/javascript; charset=utf-8"},
 "/favicon.svg":{body:${JSON.stringify(favicon)},type:"image/svg+xml"},
 "/og.jpg":{body:Uint8Array.from(atob(${JSON.stringify(ogBase64)}),c=>c.charCodeAt(0)),type:"image/jpeg"}
 };
@@ -30,4 +32,3 @@ await rm(root, { recursive: true, force: true });
 await mkdir(new URL("server/", root), { recursive: true });
 await writeFile(new URL("server/index.js", root), worker);
 console.log("Standalone Sites build complete");
-

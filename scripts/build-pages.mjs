@@ -30,6 +30,10 @@ await Promise.all([
     new URL("app.js", root),
   ),
   copyFile(
+    new URL("../standalone/overlap.js", import.meta.url),
+    new URL("overlap.js", root),
+  ),
+  copyFile(
     new URL("../public/og.jpg", import.meta.url),
     new URL("og.jpg", root),
   ),
@@ -39,4 +43,3 @@ await Promise.all([
   ),
 ]);
 console.log("GitHub Pages build complete");
-

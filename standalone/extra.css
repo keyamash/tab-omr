@@ -36,6 +36,16 @@
   grid-template-columns: repeat(4, 1fr);
 }
 
+.overlap-note {
+  margin: 14px 0 0;
+  padding: 10px 13px;
+  border: 1px solid rgba(40, 108, 74, 0.24);
+  border-radius: 8px;
+  background: rgba(40, 108, 74, 0.08);
+  color: #286c4a;
+  font: 600 12px/1.5 Arial, sans-serif;
+}
+
 .score-preview {
   margin-top: 28px;
   padding: 28px;

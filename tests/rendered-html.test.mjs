@@ -23,6 +23,8 @@ test("server-renders the Tablature Lens product", async () => {
   assert.match(html, /認識した楽譜/);
   assert.match(html, /score-preview/);
   assert.match(html, /technique-count/);
+  assert.match(html, /overlap-note/);
+  assert.match(html, /overlap\.js/);
   assert.match(html, /tesseract\.js@5/);
   assert.match(html, /半音下げ/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);

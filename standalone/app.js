@@ -363,9 +363,12 @@
 
   async function convertInBrowser(tempo, tuning) {
     const measures = [];
+    const imageMeasureSets = [];
     const warnings = [];
     let techniqueCount = 0;
+    let overlapCount = 0;
     for (let imageIndex = 0; imageIndex < state.images.length; imageIndex += 1) {
+      const imageMeasures = [];
       const bitmap = await createImageBitmap(state.images[imageIndex].file);
       const scale = Math.min(2, 2200 / bitmap.width);
       const width = Math.round(bitmap.width * scale);
@@ -424,7 +427,6 @@
           }
         }
         const techniqueResult = applyTechniqueHints(tabMeasures, hints, tab);
-        techniqueCount += techniqueResult.count;
         techniqueResult.unmatched.forEach((label) => {
           warnings.push({
             image_index: imageIndex,
@@ -432,8 +434,50 @@
             message: `${label}記号の接続先を確定できなかったため確認してください`,
           });
         });
-        measures.push(...tabMeasures);
+        imageMeasures.push(...tabMeasures);
       }
+      if (imageMeasures.length) {
+        imageMeasureSets.push({ imageIndex, measures: imageMeasures });
+      }
+    }
+    if (globalThis.TabOverlap) {
+      const overlapResult =
+        globalThis.TabOverlap.mergeMeasureSets(imageMeasureSets);
+      measures.push(...overlapResult.measures);
+      techniqueCount = overlapResult.techniqueCount;
+      overlapCount = overlapResult.overlapCount;
+      overlapResult.ambiguousImages.forEach((imageIndex) => {
+        warnings.push({
+          image_index: imageIndex,
+          measure_index: null,
+          message:
+            "重複候補が複数あったため自動統合しませんでした。画像の順番と認識結果を確認してください",
+        });
+      });
+    } else {
+      imageMeasureSets.forEach((set) => measures.push(...set.measures));
+      techniqueCount = imageMeasureSets.reduce(
+        (sum, set) =>
+          sum +
+          set.measures.reduce(
+            (measureSum, events) =>
+              measureSum +
+              events.reduce(
+                (eventSum, event) =>
+                  eventSum +
+                  event.notes.reduce(
+                    (noteSum, note) =>
+                      noteSum +
+                      (note.techniques?.hammerStart ? 1 : 0) +
+                      (note.techniques?.slideStart ? 1 : 0),
+                    0,
+                  ),
+                0,
+              ),
+            0,
+          ),
+        0,
+      );
     }
     if (!measures.length) {
       measures.push(Array.from({ length: 4 }, () => ({ duration: 4, notes: [], rest: true })));
@@ -448,6 +492,7 @@
       warning_count: warnings.length,
       warnings,
       technique_count: techniqueCount,
+      overlap_count: overlapCount,
       measures,
       tempo,
       tuning,
@@ -1592,6 +1637,10 @@
     $("#technique-count").textContent = result.technique_count || 0;
     $("#warning-count").textContent = result.warning_count;
     $("#warning-metric").classList.toggle("has-warning", Boolean(result.warning_count));
+    const overlapNote = $("#overlap-note");
+    const overlapCount = Number(result.overlap_count || 0);
+    overlapNote.textContent = `重複する画像${overlapCount}箇所を自動統合しました`;
+    overlapNote.hidden = overlapCount === 0;
     const warningBox = $("#warnings");
     const list = warningBox.querySelector("ul");
     list.replaceChildren();
