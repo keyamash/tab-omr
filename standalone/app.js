@@ -153,9 +153,218 @@
     };
   }
 
+  let techniqueWorkerPromise = null;
+
+  async function getTechniqueWorker() {
+    if (!globalThis.Tesseract) return null;
+    if (!techniqueWorkerPromise) {
+      techniqueWorkerPromise = globalThis.Tesseract
+        .createWorker("eng")
+        .then(async (worker) => {
+          await worker.setParameters({
+            tessedit_char_whitelist: "0123456789HhPpslSL.()-",
+            tessedit_pageseg_mode: globalThis.Tesseract.PSM.SPARSE_TEXT,
+          });
+          return worker;
+        })
+        .catch(() => null);
+    }
+    return techniqueWorkerPromise;
+  }
+
+  async function recognizeTechniqueHints(canvas, tab) {
+    const worker = await getTechniqueWorker();
+    if (!worker) return [];
+    convertButton.innerHTML =
+      '<span class="spinner" aria-hidden="true"></span>奏法記号を確認しています…';
+    try {
+      const recognizeBand = async (
+        top,
+        bottom,
+        whitelist,
+        scale = 1,
+        left = 0,
+        right = canvas.width,
+      ) => {
+        const crop = document.createElement("canvas");
+        crop.width = Math.max(1, Math.round((right - left) * scale));
+        crop.height = Math.max(1, Math.round((bottom - top) * scale));
+        const context = crop.getContext("2d");
+        context.fillStyle = "white";
+        context.fillRect(0, 0, crop.width, crop.height);
+        context.drawImage(
+          canvas,
+          left,
+          top,
+          right - left,
+          bottom - top,
+          0,
+          0,
+          crop.width,
+          crop.height,
+        );
+        await worker.setParameters({
+          tessedit_char_whitelist: whitelist,
+          tessedit_pageseg_mode: globalThis.Tesseract.PSM.SPARSE_TEXT,
+        });
+        const { data } = await worker.recognize(crop);
+        return (data.words || []).map((word) => ({
+          ...word,
+          bbox: {
+            ...word.bbox,
+            x0: word.bbox.x0 / scale + left,
+            x1: word.bbox.x1 / scale + left,
+            y0: word.bbox.y0 / scale + top,
+            y1: word.bbox.y1 / scale + top,
+          },
+        }));
+      };
+      const labelTop = Math.max(
+        0,
+        Math.round(tab.lines[0] - tab.spacing * 3.6),
+      );
+      const labelBottom = Math.min(
+        canvas.height,
+        Math.round(tab.lines[0] + tab.spacing * 0.45),
+      );
+      const numberTop = Math.max(
+        0,
+        Math.round(tab.lines[0] - tab.spacing * 0.65),
+      );
+      const numberBottom = Math.min(
+        canvas.height,
+        Math.round(tab.lines[5] + tab.spacing * 1.45),
+      );
+      const broadTop = Math.max(
+        0,
+        Math.round(tab.lines[0] - tab.spacing * 3.4),
+      );
+      const broadBottom = Math.min(
+        canvas.height,
+        Math.round(tab.lines[5] + tab.spacing * 3.4),
+      );
+      const labelWords = await recognizeBand(
+        labelTop,
+        labelBottom,
+        "HhslSL.",
+      );
+      const targetedNumberWords = [];
+      for (const word of labelWords) {
+        if (!/^sl\.?$/i.test(String(word.text || "").replace(/\s+/g, ""))) {
+          continue;
+        }
+        const labelX = (word.bbox.x0 + word.bbox.x1) / 2;
+        targetedNumberWords.push(
+          ...(await recognizeBand(
+            Math.max(0, Math.round(tab.lines[2] - tab.spacing * 0.7)),
+            Math.min(
+              canvas.height,
+              Math.round(tab.lines[2] + tab.spacing * 0.75),
+            ),
+            "0123456789",
+            0.75,
+            Math.max(0, Math.round(labelX - tab.spacing * 5.2)),
+            Math.min(
+              canvas.width,
+              Math.round(labelX + tab.spacing * 5.2),
+            ),
+          )),
+        );
+      }
+      const words = [
+        ...labelWords,
+        ...(await recognizeBand(
+          numberTop,
+          numberBottom,
+          "0123456789()-",
+        )),
+        ...targetedNumberWords,
+        ...(await recognizeBand(
+          broadTop,
+          broadBottom,
+          "0123456789HhPpslSL.()-",
+          0.58,
+        )),
+      ];
+      const hints = [];
+      for (const word of words) {
+        const text = String(word.text || "").replace(/\s+/g, "");
+        const x0 = word.bbox.x0;
+        const x1 = word.bbox.x1;
+        const y0 = word.bbox.y0;
+        const y1 = word.bbox.y1;
+        const x = (x0 + x1) / 2;
+        const y = (y0 + y1) / 2;
+        if (/^H$/i.test(text) && word.confidence >= 45) {
+          hints.push({ type: "hammer", x, y, label: "H" });
+          continue;
+        }
+        if (/^sl\.?$/i.test(text) && word.confidence >= 40) {
+          hints.push({ type: "slide", x, y, label: "sl." });
+          continue;
+        }
+        const sequence = text.match(/^\(?(\d{1,2})\)?-(\d{1,2})$/);
+        if (sequence) {
+          const first = Number(sequence[1]);
+          const second = Number(sequence[2]);
+          if (first <= 24 && second <= 24) {
+            hints.push({
+              type: "sequence",
+              x,
+              y,
+              x0,
+              x1,
+              first,
+              second,
+            });
+            hints.push({ type: "hammer", x, y, label: "H" });
+          }
+          continue;
+        }
+        const grace = text.match(/^\((\d{1,2})\)$/);
+        if (grace && Number(grace[1]) <= 24) {
+          hints.push({
+            type: "grace",
+            x,
+            y,
+            x0,
+            x1,
+            fret: Number(grace[1]),
+          });
+          continue;
+        }
+        if (
+          /^\d{3,8}$/.test(text) &&
+          x1 - x0 >= tab.spacing * 1.5
+        ) {
+          hints.push({
+            type: "numberRun",
+            x,
+            y,
+            x0,
+            x1,
+            digits: text,
+          });
+        }
+      }
+      return hints.filter(
+        (hint, index) =>
+          !hints.slice(0, index).some(
+            (previous) =>
+              previous.type === hint.type &&
+              Math.abs(previous.x - hint.x) < tab.spacing * 0.65 &&
+              Math.abs(previous.y - hint.y) < tab.spacing * 0.9,
+          ),
+      );
+    } catch {
+      return [];
+    }
+  }
+
   async function convertInBrowser(tempo, tuning) {
     const measures = [];
     const warnings = [];
+    let techniqueCount = 0;
     for (let imageIndex = 0; imageIndex < state.images.length; imageIndex += 1) {
       const bitmap = await createImageBitmap(state.images[imageIndex].file);
       const scale = Math.min(2, 2200 / bitmap.width);
@@ -181,10 +390,15 @@
       if (!groups.some((group) => group.lines.length === 5)) {
         warnings.push({ image_index: imageIndex, measure_index: null, message: "五線譜を検出できず、TABから音価を推定しました" });
       }
-      tabs.forEach((tab) => {
+      for (const tab of tabs) {
+        const hints = await recognizeTechniqueHints(canvas, tab);
         const bars = detectBars(binary, width, height, tab);
+        const tabMeasures = [];
         for (let index = 0; index < bars.length - 1; index += 1) {
-          const candidates = detectDigits(
+          if (bars[index + 1] - bars[index] < tab.spacing * 4) {
+            continue;
+          }
+          let candidates = detectDigits(
             binary,
             width,
             height,
@@ -192,10 +406,34 @@
             bars[index],
             bars[index + 1],
             index === 0,
+            hints,
           );
-          if (candidates.length) measures.push(fillMeasure(cluster(candidates, bars[index + 1] - bars[index])));
+          candidates = applyFretSequenceHints(
+            candidates,
+            hints,
+            tab,
+            bars[index],
+            bars[index + 1],
+          );
+          if (candidates.length) {
+            tabMeasures.push(
+              fillMeasure(
+                cluster(candidates, bars[index + 1] - bars[index]),
+              ),
+            );
+          }
         }
-      });
+        const techniqueResult = applyTechniqueHints(tabMeasures, hints, tab);
+        techniqueCount += techniqueResult.count;
+        techniqueResult.unmatched.forEach((label) => {
+          warnings.push({
+            image_index: imageIndex,
+            measure_index: null,
+            message: `${label}記号の接続先を確定できなかったため確認してください`,
+          });
+        });
+        measures.push(...tabMeasures);
+      }
     }
     if (!measures.length) {
       measures.push(Array.from({ length: 4 }, () => ({ duration: 4, notes: [], rest: true })));
@@ -209,6 +447,7 @@
       note_count: measures.flat().reduce((sum, event) => sum + event.notes.length, 0),
       warning_count: warnings.length,
       warnings,
+      technique_count: techniqueCount,
       measures,
       tempo,
       tuning,
@@ -335,14 +574,20 @@
   }
 
   const templateCache = new Map();
-  function detectDigits(binary, width, height, tab, left, right, systemStart) {
+  function detectDigits(
+    binary,
+    width,
+    height,
+    tab,
+    left,
+    right,
+    systemStart,
+    hints,
+  ) {
     const candidates = [];
     const lineMask = Math.max(1, Math.round(tab.spacing * 0.1));
     const halfBand = Math.max(4, Math.round(tab.spacing * 0.48));
-    const notationInset = systemStart
-      ? Math.min((right - left) * 0.24, tab.spacing * 3.6)
-      : 0;
-    const contentLeft = Math.round(left + notationInset);
+    const contentLeft = left;
     tab.lines.forEach((line, stringIndex) => {
       const top = Math.max(0, line - halfBand);
       const bottom = Math.min(height - 1, line + halfBand);
@@ -371,24 +616,55 @@
           }
           const pointTop = Math.min(...points.map(([, y]) => y));
           const pointBottom = Math.max(...points.map(([, y]) => y));
+          const pointWidth = end - start + 1;
+          const pointHeight = pointBottom - pointTop + 1;
           if (
             points.length < Math.max(5, tab.spacing * 0.45) ||
-            pointBottom - pointTop + 1 < tab.spacing * 0.42
+            pointHeight < tab.spacing * 0.42 ||
+            pointWidth / Math.max(1, pointHeight) < 0.28
           ) {
             return;
           }
-          const fret = recognize(points);
-          if (fret !== null) {
+          const centerX = Math.round((start + end) / 2);
+          const centerY = (pointTop + pointBottom) / 2;
+          const nearHammer = hints.some(
+            (hint) =>
+              hint.type === "hammer" &&
+              Math.abs(hint.x - centerX) <= tab.spacing * 2.1,
+          );
+          if (nearHammer && glyphWidth > tab.spacing * 1.35) {
+            const split = recognizeSplit(points, start, end);
+            if (split) {
+              candidates.push(
+                {
+                  x: split.firstX,
+                  string: stringIndex + 1,
+                  fret: split.first,
+                  score: split.score,
+                },
+                {
+                  x: split.secondX,
+                  string: stringIndex + 1,
+                  fret: split.second,
+                  score: split.score,
+                },
+              );
+              return;
+            }
+          }
+          const recognition = recognizeDetailed(points);
+          if (recognition.score >= 0.42 && recognition.value !== null) {
             candidates.push({
-              x: Math.round((start + end) / 2),
+              x: centerX,
               string: stringIndex + 1,
-              fret,
+              fret: recognition.value,
+              score: recognition.score,
             });
           }
         },
       );
     });
-    return candidates.filter(
+    let filtered = candidates.filter(
       (candidate, index) =>
         !candidates.slice(0, index).some((other) => {
           return (
@@ -397,9 +673,62 @@
           );
         }),
     );
+    if (systemStart) {
+      const earlyLimit = left + tab.spacing * 3.2;
+      const early = filtered
+        .filter((candidate) => candidate.x <= earlyLimit)
+        .sort((first, second) => first.x - second.x);
+      const notationXs = new Set();
+      for (let index = 0; index < early.length; index += 1) {
+        const cluster = early.filter(
+          (candidate) =>
+            Math.abs(candidate.x - early[index].x) <= tab.spacing * 0.55,
+        );
+        if (new Set(cluster.map((candidate) => candidate.string)).size >= 2) {
+          cluster.forEach((candidate) => notationXs.add(candidate));
+        }
+      }
+      filtered = filtered.filter((candidate) => !notationXs.has(candidate));
+    }
+    return filtered;
   }
 
   function recognize(points) {
+    const result = recognizeDetailed(points);
+    return result.score >= 0.42 ? result.value : null;
+  }
+
+  function recognizeSplit(points, left, right) {
+    let best = null;
+    for (const fraction of [0.42, 0.48, 0.54, 0.6]) {
+      const splitX = left + (right - left) * fraction;
+      const firstPoints = points.filter(([x]) => x < splitX);
+      const secondPoints = points.filter(([x]) => x >= splitX);
+      if (firstPoints.length < 5 || secondPoints.length < 5) continue;
+      const first = recognizeDetailed(firstPoints);
+      const second = recognizeDetailed(secondPoints);
+      const score = Math.min(first.score, second.score);
+      if (
+        first.value !== null &&
+        second.value !== null &&
+        first.value <= 24 &&
+        second.value <= 24 &&
+        score >= 0.42 &&
+        (!best || score > best.score)
+      ) {
+        best = {
+          first: first.value,
+          second: second.value,
+          firstX: Math.round((left + splitX) / 2),
+          secondX: Math.round((splitX + right) / 2),
+          score,
+        };
+      }
+    }
+    return best;
+  }
+
+  function recognizeDetailed(points) {
     const left = Math.min(...points.map(([x]) => x));
     const right = Math.max(...points.map(([x]) => x));
     const top = Math.min(...points.map(([, y]) => y));
@@ -439,7 +768,7 @@
         }
       }
     }
-    return bestScore >= 0.42 ? best : null;
+    return { value: best, score: bestScore };
   }
 
   function tolerantDice(first, second) {
@@ -523,27 +852,379 @@
     return output;
   }
 
+  function applyFretSequenceHints(candidates, hints, tab, left, right) {
+    const output = [...candidates];
+    for (const hint of hints) {
+      if (
+        hint.type !== "sequence" ||
+        hint.x < left ||
+        hint.x >= right
+      ) {
+        continue;
+      }
+      const stringIndex = tab.lines.reduce(
+        (best, line, index) =>
+          Math.abs(line - hint.y) < Math.abs(tab.lines[best] - hint.y)
+            ? index
+            : best,
+        0,
+      );
+      const string = stringIndex + 1;
+      const padding = tab.spacing * 0.45;
+      for (let index = output.length - 1; index >= 0; index -= 1) {
+        if (
+          output[index].x >= hint.x0 - padding &&
+          output[index].x <= hint.x1 + padding &&
+          (output[index].string === string ||
+            (Math.abs(output[index].string - string) === 1 &&
+              (output[index].score || 0) < 0.72))
+        ) {
+          output.splice(index, 1);
+        }
+      }
+      const width = hint.x1 - hint.x0;
+      for (let index = output.length - 1; index >= 0; index -= 1) {
+        if (
+          output[index].string !== string &&
+          output[index].x >= hint.x0 - padding * 0.35 &&
+          output[index].x <= hint.x1 + padding * 0.35 &&
+          (output[index].score || 0) < 0.72
+        ) {
+          output.splice(index, 1);
+        }
+      }
+      output.push(
+        {
+          x: Math.round(hint.x0 + width * 0.22),
+          string,
+          fret: hint.first,
+          score: 1,
+        },
+        {
+          x: Math.round(hint.x1 - width * 0.22),
+          string,
+          fret: hint.second,
+          score: 1,
+        },
+      );
+    }
+    for (const hint of hints) {
+      if (
+        hint.type !== "numberRun" ||
+        hint.x < left ||
+        hint.x >= right ||
+        !hints.some(
+          (label) =>
+            (label.type === "hammer" || label.type === "slide") &&
+            Math.abs(label.x - hint.x) <= tab.spacing * 4.5,
+        )
+      ) {
+        continue;
+      }
+      const stringIndex = tab.lines.reduce(
+        (best, line, index) =>
+          Math.abs(line - hint.y) < Math.abs(tab.lines[best] - hint.y)
+            ? index
+            : best,
+        0,
+      );
+      const string = stringIndex + 1;
+      const padding = tab.spacing * 0.55;
+      const nearby = output
+        .filter(
+          (candidate) =>
+            candidate.string === string &&
+            candidate.x >= hint.x0 - padding &&
+            candidate.x <= hint.x1 + padding,
+        )
+        .sort((first, second) => first.x - second.x);
+      const consolidated = [];
+      for (const candidate of nearby) {
+        const previous = consolidated.at(-1);
+        if (
+          previous &&
+          candidate.x - previous.x < tab.spacing * 0.85
+        ) {
+          if ((candidate.score || 0) > (previous.score || 0)) {
+            consolidated[consolidated.length - 1] = candidate;
+          }
+        } else {
+          consolidated.push(candidate);
+        }
+      }
+      if (consolidated.length < 2) continue;
+      const nearbyHammer = hints
+        .filter((label) => label.type === "hammer")
+        .sort(
+          (first, second) =>
+            Math.abs(first.x - hint.x) - Math.abs(second.x - hint.x),
+        )[0];
+      const values = partitionFretRun(
+        hint.digits,
+        consolidated.map((candidate) => candidate.fret),
+        nearbyHammer &&
+          Math.abs(nearbyHammer.x - hint.x) <= tab.spacing * 4.5
+          ? (nearbyHammer.x - hint.x0) / Math.max(1, hint.x1 - hint.x0)
+          : null,
+      );
+      if (!values) continue;
+      for (let index = output.length - 1; index >= 0; index -= 1) {
+        if (
+          output[index].x >= hint.x0 - padding &&
+          output[index].x <= hint.x1 + padding &&
+          (output[index].string === string ||
+            (Math.abs(output[index].string - string) === 1 &&
+              (output[index].score || 0) < 0.72))
+        ) {
+          output.splice(index, 1);
+        }
+      }
+      consolidated.slice(0, values.length).forEach((candidate, index) => {
+        output.push({
+          x: candidate.x,
+          string,
+          fret: values[index],
+          score: 1,
+        });
+      });
+    }
+    for (const hint of hints) {
+      if (
+        hint.type !== "grace" ||
+        hint.x < left ||
+        hint.x >= right
+      ) {
+        continue;
+      }
+      const stringIndex = tab.lines.reduce(
+        (best, line, index) =>
+          Math.abs(line - hint.y) < Math.abs(tab.lines[best] - hint.y)
+            ? index
+            : best,
+        0,
+      );
+      const string = stringIndex + 1;
+      const padding = tab.spacing * 0.5;
+      for (let index = output.length - 1; index >= 0; index -= 1) {
+        if (
+          output[index].string === string &&
+          output[index].x >= hint.x0 - padding &&
+          output[index].x <= hint.x1 + padding
+        ) {
+          output.splice(index, 1);
+        }
+      }
+      output.push({
+        x: Math.round(hint.x),
+        string,
+        fret: hint.fret,
+        score: 1,
+        grace: true,
+      });
+    }
+    return output;
+  }
+
+  function partitionFretRun(digits, observed, hammerPosition = null) {
+    const candidates = [];
+    const walk = (offset, values) => {
+      if (values.length > observed.length) return;
+      if (offset === digits.length) {
+        if (values.length >= 2) candidates.push(values);
+        return;
+      }
+      for (const length of [1, 2]) {
+        const token = digits.slice(offset, offset + length);
+        if (
+          token.length !== length ||
+          (token.length > 1 && token.startsWith("0"))
+        ) {
+          continue;
+        }
+        const value = Number(token);
+        if (value <= 24) walk(offset + length, [...values, value]);
+      }
+    };
+    walk(0, []);
+    if (!candidates.length) return null;
+    candidates.sort((first, second) => {
+      const score = (values) => {
+        const observedScore = values.reduce((sum, value, index) => {
+          const observedIndex = Math.round(
+            (index / Math.max(1, values.length - 1)) *
+              Math.max(0, observed.length - 1),
+          );
+          return (
+            sum +
+            Math.min(18, Math.abs(value - observed[observedIndex]))
+          );
+        }, 0);
+        let techniquePenalty = 0;
+        if (Number.isFinite(hammerPosition)) {
+          let hammerIndex = 0;
+          let closest = Infinity;
+          for (let index = 0; index < values.length - 1; index += 1) {
+            const midpoint = (index + 0.5) / (values.length - 1);
+            const distance = Math.abs(midpoint - hammerPosition);
+            if (distance < closest) {
+              closest = distance;
+              hammerIndex = index;
+            }
+          }
+          if (values[hammerIndex + 1] <= values[hammerIndex]) {
+            techniquePenalty += 32;
+          }
+        }
+        return observedScore + values.length * 3 + techniquePenalty;
+      };
+      const firstScore = score(first);
+      const secondScore = score(second);
+      return firstScore - secondScore;
+    });
+    return candidates[0];
+  }
+
+  function applyTechniqueHints(measures, hints, tab) {
+    const unmatched = [];
+    let count = 0;
+    const byString = new Map();
+    measures.forEach((events) => {
+      events.forEach((event) => {
+        if (event.rest || !Number.isFinite(event.x)) return;
+        event.notes.forEach((note) => {
+          if (!byString.has(note.string)) byString.set(note.string, []);
+          byString.get(note.string).push({ event, note, x: event.x });
+        });
+      });
+    });
+    byString.forEach((notes) => notes.sort((first, second) => first.x - second.x));
+    const usedHammerPairs = new Set();
+    for (const hint of hints.filter((item) => item.type === "hammer")) {
+      const pairs = [];
+      byString.forEach((notes, string) => {
+        for (let index = 0; index < notes.length - 1; index += 1) {
+          const first = notes[index];
+          const second = notes[index + 1];
+          const gap = second.x - first.x;
+          if (
+            gap <= 0 ||
+            gap > tab.spacing * 4.5 ||
+            second.note.fret <= first.note.fret
+          ) {
+            continue;
+          }
+          const midpoint = (first.x + second.x) / 2;
+          const distance = Math.abs(midpoint - hint.x);
+          if (distance <= tab.spacing * 3.2) {
+            pairs.push({ first, second, string, distance, midpoint });
+          }
+        }
+      });
+      pairs.sort((first, second) => first.distance - second.distance);
+      const pair = pairs[0];
+      if (!pair) {
+        unmatched.push("H");
+        continue;
+      }
+      const key = `${pair.string}:${pair.first.x}:${pair.second.x}`;
+      if (usedHammerPairs.has(key)) continue;
+      usedHammerPairs.add(key);
+      markTechnique(pair.first.note, "hammerStart");
+      markTechnique(pair.second.note, "hammerStop");
+      count += 1;
+    }
+    for (const hint of hints.filter((item) => item.type === "slide")) {
+      const pairs = [];
+      byString.forEach((notes, string) => {
+        for (let index = 0; index < notes.length - 1; index += 1) {
+          const first = notes[index];
+          const second = notes[index + 1];
+          const gap = second.x - first.x;
+          if (
+            gap <= 0 ||
+            gap > tab.spacing * 5 ||
+            second.note.fret >= first.note.fret
+          ) {
+            continue;
+          }
+          const midpoint = (first.x + second.x) / 2;
+          const distance = Math.abs(midpoint - hint.x);
+          if (distance <= tab.spacing * 2.7) {
+            pairs.push({ first, second, string, distance, midpoint });
+          }
+        }
+      });
+      pairs.sort((first, second) => first.distance - second.distance);
+      const selected = pairs.slice(0, 2);
+      if (!selected.length) {
+        unmatched.push("sl.");
+        continue;
+      }
+      selected.forEach((pair) => {
+        markTechnique(pair.first.note, "slideStart");
+        markTechnique(pair.second.note, "slideStop");
+        count += 1;
+      });
+    }
+    return { count, unmatched: [...new Set(unmatched)] };
+  }
+
+  function markTechnique(note, name) {
+    if (!note.techniques) note.techniques = {};
+    note.techniques[name] = true;
+  }
+
   function cluster(notes, width) {
     const clusters = [];
     const tolerance = Math.max(5, width / 100);
     notes.sort((a, b) => a.x - b.x).forEach((note) => {
       const cluster = clusters.at(-1);
       const center = cluster ? cluster.reduce((sum, item) => sum + item.x, 0) / cluster.length : -Infinity;
-      if (cluster && Math.abs(note.x - center) <= tolerance) cluster.push(note);
+      const sameGraceKind =
+        cluster &&
+        Boolean(note.grace) === cluster.every((item) => Boolean(item.grace));
+      if (
+        cluster &&
+        sameGraceKind &&
+        Math.abs(note.x - center) <= tolerance
+      ) {
+        cluster.push(note);
+      }
       else clusters.push([note]);
     });
-    const target = 16 / Math.max(1, clusters.length);
+    const regularCount = clusters.filter(
+      (items) => !items.every((item) => item.grace),
+    ).length;
+    const target = 16 / Math.max(1, regularCount);
     const duration = [1, 2, 4].reduce((best, value) => Math.abs(value - target) < Math.abs(best - target) ? value : best);
-    return clusters.map((items) => ({
-      duration,
-      notes: [...new Map(items.map((item) => [item.string, { string: item.string, fret: item.fret }])).values()],
-    }));
+    return clusters.map((items) => {
+      const grace = items.every((item) => item.grace);
+      return {
+        x: Math.round(
+          items.reduce((sum, item) => sum + item.x, 0) / items.length,
+        ),
+        duration: grace ? 0 : duration,
+        grace,
+        notes: [
+          ...new Map(
+            items.map((item) => [
+              item.string,
+              { string: item.string, fret: item.fret },
+            ]),
+          ).values(),
+        ],
+      };
+    });
   }
 
   function fillMeasure(events) {
     const output = [];
     let cursor = 0;
     events.forEach((event) => {
+      if (event.grace) {
+        output.push(event);
+        return;
+      }
       if (cursor >= 16) return;
       output.push({ ...event, duration: Math.min(event.duration, 16 - cursor) });
       cursor += Math.min(event.duration, 16 - cursor);
@@ -578,14 +1259,41 @@
   }
 
   function eventXml(event, tuning) {
-    const type = event.duration >= 4 ? "quarter" : event.duration >= 2 ? "eighth" : "16th";
+    const type = event.grace
+      ? "eighth"
+      : event.duration >= 4
+        ? "quarter"
+        : event.duration >= 2
+          ? "eighth"
+          : "16th";
     if (event.rest) return `<note><rest/><duration>${event.duration}</duration><voice>1</voice><type>${type}</type><staff>1</staff></note>`;
     const steps = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"];
     const alters = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
     return event.notes.map((note, index) => {
       const midi = tuning[note.string - 1] + note.fret;
       const pc = midi % 12;
-      return `<note>${index ? "<chord/>" : ""}<pitch><step>${steps[pc]}</step>${alters[pc] ? `<alter>${alters[pc]}</alter>` : ""}<octave>${Math.floor(midi / 12) - 1}</octave></pitch><duration>${event.duration}</duration><voice>1</voice><type>${type}</type><staff>1</staff><notations><technical><string>${note.string}</string><fret>${note.fret}</fret></technical></notations></note>`;
+      const technique = note.techniques || {};
+      const hammer = [
+        technique.hammerStart
+          ? '<hammer-on type="start" number="1">H</hammer-on>'
+          : "",
+        technique.hammerStop
+          ? '<hammer-on type="stop" number="1"/>'
+          : "",
+      ].join("");
+      const slide = [
+        technique.slideStart
+          ? '<slide type="start" number="1">sl.</slide>'
+          : "",
+        technique.slideStop ? '<slide type="stop" number="1"/>' : "",
+      ].join("");
+      const slur = [
+        technique.hammerStart ? '<slur type="start" number="1"/>' : "",
+        technique.hammerStop ? '<slur type="stop" number="1"/>' : "",
+      ].join("");
+      const grace = event.grace ? '<grace slash="yes"/>' : "";
+      const duration = event.grace ? "" : `<duration>${event.duration}</duration>`;
+      return `<note>${index ? "<chord/>" : ""}${grace}<pitch><step>${steps[pc]}</step>${alters[pc] ? `<alter>${alters[pc]}</alter>` : ""}<octave>${Math.floor(midi / 12) - 1}</octave></pitch>${duration}<voice>1</voice><type>${type}</type><staff>1</staff><notations>${slide}${slur}<technical><string>${note.string}</string><fret>${note.fret}</fret>${hammer}</technical></notations></note>`;
     }).join("");
   }
 
@@ -673,9 +1381,14 @@
       context.font = "10px Arial, sans-serif";
       context.fillText(String(measureOffset + measureIndex + 1), measureLeft + 7, 34);
       let cursor = 0;
+      const openHammers = new Map();
+      const openSlides = new Map();
       events.forEach((event) => {
         const eventX =
-          measureLeft + 22 + (cursor / 16) * (measureWidth - 44);
+          measureLeft +
+          22 +
+          (cursor / 16) * (measureWidth - 44) -
+          (event.grace ? 9 : 0);
         if (!event.rest && event.notes.length) {
           drawStandardNotes(
             context,
@@ -687,6 +1400,36 @@
             tuning,
           );
           drawTabNotes(context, event.notes, eventX, tabTop, tabGap);
+          event.notes.forEach((note) => {
+            const technique = note.techniques || {};
+            const y = tabTop + (note.string - 1) * tabGap;
+            if (technique.hammerStop && openHammers.has(note.string)) {
+              drawTechniqueSpan(
+                context,
+                openHammers.get(note.string),
+                eventX,
+                y,
+                "hammer",
+              );
+              openHammers.delete(note.string);
+            }
+            if (technique.hammerStart) {
+              openHammers.set(note.string, eventX);
+            }
+            if (technique.slideStop && openSlides.has(note.string)) {
+              drawTechniqueSpan(
+                context,
+                openSlides.get(note.string),
+                eventX,
+                y,
+                "slide",
+              );
+              openSlides.delete(note.string);
+            }
+            if (technique.slideStart) {
+              openSlides.set(note.string, eventX);
+            }
+          });
         } else if (event.rest && event.duration >= 4) {
           context.fillStyle = "#1b1d19";
           context.fillRect(eventX - 5, staffTop + 17, 10, 4);
@@ -694,6 +1437,35 @@
         cursor += event.duration;
       });
     });
+  }
+
+  function drawTechniqueSpan(context, startX, endX, y, type) {
+    if (endX <= startX) return;
+    context.save();
+    context.strokeStyle = "#1b1d19";
+    context.fillStyle = "#1b1d19";
+    context.lineWidth = 1.2;
+    context.font = "italic 9px Arial, sans-serif";
+    context.textAlign = "center";
+    if (type === "hammer") {
+      context.beginPath();
+      context.moveTo(startX + 4, y - 7);
+      context.quadraticCurveTo(
+        (startX + endX) / 2,
+        y - 18,
+        endX - 4,
+        y - 7,
+      );
+      context.stroke();
+      context.fillText("H", (startX + endX) / 2, y - 13);
+    } else {
+      context.beginPath();
+      context.moveTo(startX + 5, y - 7);
+      context.lineTo(endX - 5, y - 2);
+      context.stroke();
+      context.fillText("sl.", (startX + endX) / 2, y - 10);
+    }
+    context.restore();
   }
 
   function drawStandardNotes(
@@ -817,6 +1589,7 @@
   function showResult(result) {
     $("#measure-count").textContent = result.measure_count;
     $("#note-count").textContent = result.note_count;
+    $("#technique-count").textContent = result.technique_count || 0;
     $("#warning-count").textContent = result.warning_count;
     $("#warning-metric").classList.toggle("has-warning", Boolean(result.warning_count));
     const warningBox = $("#warnings");

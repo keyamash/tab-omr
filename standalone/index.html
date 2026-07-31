@@ -69,14 +69,14 @@
                 <div class="setting-row"><span>拍子</span><strong>4 / 4</strong></div>
                 <label class="setting-row tempo-row"><span>テンポ</span><span class="tempo-control"><input id="tempo" aria-label="テンポ" type="number" min="30" max="300" value="120" /><b>BPM</b></span></label>
               </div>
-              <p class="setting-note">画像に合うチューニングを選んでください。チョーキング、スライド、連符、変拍子にはまだ対応していません。</p>
+              <p class="setting-note">画像に合うチューニングを選んでください。H（ハンマリング）と sl.（スライド）は自動認識します。</p>
             </section>
             <div id="error" class="error-banner" role="alert" hidden><span aria-hidden="true">!</span><p></p></div>
             <button id="convert" type="button" class="convert-button" disabled>MusicXMLに変換<span aria-hidden="true">→</span></button>
             <div class="process-note"><span aria-hidden="true">◎</span><p id="process-note">画像はこの端末内だけで処理されます。</p></div>
             <section id="result" class="result-panel" aria-live="polite" hidden>
               <div class="result-heading"><div class="success-mark">✓</div><div><span class="eyebrow">CONVERSION COMPLETE</span><h2>MusicXMLを生成しました</h2></div></div>
-              <div class="metrics"><div><strong id="measure-count">0</strong><span>小節</span></div><div><strong id="note-count">0</strong><span>音符</span></div><div id="warning-metric"><strong id="warning-count">0</strong><span>警告</span></div></div>
+              <div class="metrics"><div><strong id="measure-count">0</strong><span>小節</span></div><div><strong id="note-count">0</strong><span>音符</span></div><div><strong id="technique-count">0</strong><span>奏法</span></div><div id="warning-metric"><strong id="warning-count">0</strong><span>警告</span></div></div>
               <div id="warnings" class="warnings" hidden><h3>確認してほしい箇所</h3><ul></ul></div>
               <a id="download" class="download-button" href="#"><span>↓</span>MusicXMLをダウンロード</a>
               <p class="download-note">TuxGuitarで開き、認識結果を確認・修正してください。</p>
@@ -97,6 +97,7 @@
       </main>
       <footer><span>TABLATURE LENS · 2026</span><p>Clear scores in. Editable music out.</p></footer>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
     <script src="./app.js" defer></script>
   </body>
 </html>
